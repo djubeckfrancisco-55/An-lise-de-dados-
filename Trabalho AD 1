@@ -1,0 +1,213 @@
+0. PACOTES
+library(tidyverse) library(skimr) library(GGally) library(corrplot) library(gridExtra) library(car) library(rstatix) library(emmeans) library(FSA)
+# Criar pasta para guardar tabelas separadas
+if (!dir.exists("tabelas")) dir.create("tabelas")
+# 1. LEITURA E LIMPEZA
+dados <- read.delim("C:/Users/User/OneDrive/Desktop/ananalise de dados/ Trabalho AD/BasedeDados.txt",
+header = TRUE , sep = "\t",
+stringsAsFactors = FALSE , strip.white = TRUE)
+dados <- dados %>% mutate(across(where(is.character), trimws)) %>% mutate(
+)
+TREAT = TREATMENT")),
+VISIT = GENDER = SMOKESTATUS =
+)), LIVINGSTATUS =
+factor(TREAT , factor(VISIT ,
+levels = levels =
+# 2. FORMATO LARGO
+dados_largo <- dados %>% pivot_wider(
+)
+id_cols
+names_from
+values_from
+names_prefix = "WEIGHT_"
+) %>% mutate(
+MUDANCA = PERDA = PERDA_REL =
+WEIGHT_POST - WEIGHT_PRE, -MUDANCA ,
+(MUDANCA / WEIGHT_PRE) * 100
+c("CONTROL", "PLACEBO", " c("PRE", "POST")),
+levels
+levels = c("NON-SMOKER", "QUIT-SMOKER", "SMOKER"
+factor(LIVINGSTATUS)
+(uma linha por indivíduo)
+factor(GENDER , factor(SMOKESTATUS ,
+=
+c("FEMALE", "MALE")),
+= c(ID, TREAT, AGE, LIVINGSTATUS, SMOKESTATUS, GENDER), = VISIT ,
+= WEIGHT ,
+# 3. TABELAS SEPARADAS
+# Tabela 1: Caracterização da amostra (idade) tab_idade <- dados_largo %>%
+group_by(TREAT) %>% summarise(
+n = n(), idade_media = mean(AGE),
+ 11
+
+ idade_sd idade_min idade_max
+= sd(AGE), = min(AGE), = max(AGE)
+)
+print(tab_idade)
+write.csv(tab_idade , "tabelas/tab1_idade.csv", row.names = FALSE)
+# Tabela 2: Género por grupo
+tab_genero <- dados_largo %>%
+count(TREAT , GENDER) %>%
+group_by(TREAT) %>%
+mutate(percent = round(100 * n / sum(n), 1)) %>% ungroup ()
+print(tab_genero)
+write.csv(tab_genero , "tabelas/tab2_genero.csv", row.names =
+# Tabela 3: Tabagismo por grupo
+tab_fumo <- dados_largo %>%
+count(TREAT, SMOKESTATUS) %>%
+group_by(TREAT) %>%
+mutate(percent = round(100 * n / sum(n), 1)) %>% ungroup ()
+FALSE)
+print(tab_fumo)
+write.csv(tab_fumo, "tabelas/tab3_tabagismo.csv", row.names = FALSE)
+# Tabela 4: Estado civil por grupo
+tab_estado_civil <- dados_largo %>%
+count(TREAT, LIVINGSTATUS) %>%
+group_by(TREAT) %>%
+mutate(percent = round(100 * n / sum(n), 1)) %>% ungroup ()
+print(tab_estado_civil)
+write.csv(tab_estado_civil , "tabelas/tab4_estado_civil.csv", row.names =
+FALSE)
+# Tabela 5: Peso pré, pós e mudança por grupo
+tab_peso <- dados_largo %>% group_by(TREAT) %>% summarise(
+n peso_pre_media peso_pre_sd peso_pos_media peso_pos_sd mudanca_media mudanca_mediana mudanca_sd mudanca_min mudanca_max
+)
+print(tab_peso) write.csv(tab_peso,
+# Tabela 6: Mudança
+= n(),
+= mean(WEIGHT_PRE),
+= sd(WEIGHT_PRE),
+= mean(WEIGHT_POST),
+= sd(WEIGHT_POST),
+= mean(MUDANCA),
+= median(MUDANCA),
+= sd(MUDANCA),
+= min(MUDANCA),
+= max(MUDANCA)
+"tabelas/tab5_peso.csv", row.names = FALSE)
+de peso por género e grupo
+tab_genero_mudanca <- dados_largo %>% group_by(TREAT , GENDER) %>% summarise(
+n = n(),
+52 53 54 55 56 57 58 59 60 61 62 63 64 65 66 67 68 69 70 71 72 73 74 75 76 77 78 79 80 81 82 83 84
+85 86 87 88 89 90 91 92 93 94 95 96 97 98 99
+100 101 102 103 104 105 106 107 108
+12
+
+ mudanca_media = mean(MUDANCA), mudanca_sd = sd(MUDANCA), .groups = "drop"
+)
+print(tab_genero_mudanca)
+write.csv(tab_genero_mudanca , "tabelas/tab6_mudanca_genero.csv",
+= FALSE)
+# Tabela 7: Mudança de peso por tabagismo e grupo
+tab_fumo_mudanca <- dados_largo %>%
+row.names
+group_by(TREAT, summarise(
+SMOKESTATUS) %>%
+n
+mudanca_media mudanca_sd .groups = "drop"
+group_by(TREAT, summarise(
+LIVINGSTATUS) %>%
+n
+mudanca_media mudanca_sd .groups = "drop"
+= n(),
+= mean(MUDANCA), = sd(MUDANCA),
+)
+print(tab_fumo_mudanca)
+write.csv(tab_fumo_mudanca , "tabelas/tab7_mudanca_tabagismo.csv",
+names = FALSE)
+# Tabela 8: Mudança de peso por estado civil e grupo
+tab_estado_mudanca <- dados_largo %>%
+row.
+= n(),
+= mean(MUDANCA), = sd(MUDANCA),
+)
+print(tab_estado_mudanca)
+write.csv(tab_estado_mudanca , "tabelas/tab8_mudanca_estado.csv",
+= FALSE)
+# Tabela 9: Correlação idade vs mudança por grupo
+tab_cor_idade <- dados_largo %>%
+group_by(TREAT) %>%
+summarise(cor_idade_mudanca = cor(AGE, MUDANCA))
+print(tab_cor_idade)
+write.csv(tab_cor_idade , "tabelas/tab9_cor_idade.csv", row.names
+# Tabela 10: Outliers na mudança de peso
+row.names
+Q1 <- quantile(dados_largo$MUDANCA , Q3 <- quantile(dados_largo$MUDANCA , IQR_val <- Q3 - Q1
+lim_inf <- Q1 - 1.5 * IQR_val lim_sup <- Q3 + 1.5 * IQR_val
+0.25) 0.75)
+tab_outliers <- dados_largo %>%
+filter(MUDANCA < lim_inf | MUDANCA > lim_sup) %>%
+select(ID, TREAT, AGE, GENDER, WEIGHT_PRE, WEIGHT_POST, MUDANCA)
+print(tab_outliers)
+write.csv(tab_outliers , "tabelas/tab10_outliers.csv", row.names =
+# Tabela 11: Tabela de frequência grupo vs género
+tab_cruz_genero <- table(dados_largo$TREAT , dados_largo$GENDER) print(tab_cruz_genero)
+FALSE)
+=
+FALSE)
+109 110 111 112 113 114
+115 116 117 118 119 120 121 122 123 124 125 126
+127 128 129 130 131 132 133 134 135 136 137 138
+139 140 141 142 143 144 145 146 147 148 149 150 151 152 153 154 155 156 157 158 159 160 161 162
+13
+
+ write.csv(as.data.frame.matrix(tab_cruz_genero), "tabelas/tab11_cruz_ genero.csv")
+# Tabela 12: Tabela de frequência grupo vs tabagismo
+tab_cruz_fumo <- table(dados_largo$TREAT, dados_largo$SMOKESTATUS) print(tab_cruz_fumo)
+write.csv(as.data.frame.matrix(tab_cruz_fumo), "tabelas/tab12_cruz_
+tabagismo.csv")
+# Tabela 13: Tabela de frequência grupo vs estado civil
+tab_cruz_estado <- table(dados_largo$TREAT, dados_largo$LIVINGSTATUS) print(tab_cruz_estado) write.csv(as.data.frame.matrix(tab_cruz_estado), "tabelas/tab13_cruz_
+estado.csv")
+# 4. GRÁFICOS EXPLORATÓRIOS
+# Boxplot mudança por grupo
+ggplot(dados_largo , aes(x = TREAT , y = MUDANCA , fill = TREAT)) +
+geom_boxplot(alpha = 0.7) +
+geom_hline(yintercept = 0, linetype = "dashed", color = "red") + labs(title = "Mudança de Peso por Grupo", x = "Grupo", y = "Mudança (kg)
+") +
+theme_minimal() + theme(legend.position = "none")
+# Boxplot peso pré e pós por grupo
+dados %>%
+ggplot(aes(x = TREAT , y = WEIGHT , fill = VISIT)) +
+geom_boxplot(alpha = 0.7) +
+labs(title = "Peso Pré e Pós por Grupo", x = "Grupo", y = "Peso (kg)",
+fill = "Visita") + theme_minimal()
+# Histograma mudança por grupo
+ggplot(dados_largo , aes(x = MUDANCA , fill = TREAT)) + geom_histogram(bins = 20, alpha = 0.6, position = "identity") +
+geom_vline(xintercept = 0, facet_wrap(~ TREAT , ncol = labs(title = "Distribuição
+"Frequência") + theme_minimal()
+# Dispersão idade vs mudança
+linetype = "dashed", color = "red") +
+1)+
+da Mudança de Peso", x = "Mudança (kg)", y =
+ggplot(dados_largo, aes(x = AGE, y = MUDANCA, color = TREAT)) + geom_point(alpha = 0.7) +
+geom_smooth(method = "lm", se = FALSE) +
+labs(title = "Idade vs Mudança de Peso", x = "Idade", y = "Mudança (kg)"
+, color = "Grupo") + theme_minimal()
+# Boxplot mudança por género e grupo
+ggplot(dados_largo , aes(x = TREAT , y = MUDANCA , fill = GENDER)) + geom_boxplot(alpha = 0.7) +
+geom_hline(yintercept = 0, linetype = "dashed", color = "red") + labs(title = "Mudança por Género e Grupo", x = "Grupo", y = "Mudança (kg
+)", fill = "Género") + theme_minimal()
+# Boxplot mudança por tabagismo e grupo
+163
+164 165 166 167 168
+169 170 171 172 173
+174 175 176 177 178 179 180
+181 182 183 184 185 186 187
+188 189 190 191 192 193 194 195
+196 197 198 199 200 201 202
+203 204 205 206 207 208 209
+210 211 212
+14
+
+ ggplot(dados_largo, aes(x = TREAT, y = MUDANCA, fill = SMOKESTATUS)) + geom_boxplot(alpha = 0.7) +
+geom_hline(yintercept = 0, linetype = "dashed", color = "red") + labs(title = "Mudança por Tabagismo e Grupo", x = "Grupo", y = "Mudança
+(kg)", fill = "Tabagismo") + theme_minimal()
+# Boxplot mudança por estado civil e grupo
+ggplot(dados_largo, aes(x = TREAT, y = MUDANCA, fill = LIVINGSTATUS)) + geom_boxplot(alpha = 0.7) +
+geom_hline(yintercept = 0, linetype = "dashed", color = "red") + labs(title = "Mudança por Estado Civil e Grupo", x = "Grupo", y = "Mudan
+ça (kg)", fill = "Estado Civil") + theme_minimal()
+ 213 214 215 216
+217 218 219 220 221 222 223
+224
+ 
