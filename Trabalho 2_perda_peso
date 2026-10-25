@@ -1,0 +1,335 @@
+# 0. PACOTES E CONFIGURAÇÃO
+library(tidyverse)
+library(skimr)
+library(GGally)
+library(corrplot)
+library(gridExtra)
+library(car)
+library(rstatix)
+library(emmeans)
+library(FSA)
+
+if (!dir.exists("tabelas")) dir.create("tabelas")
+if (!dir.exists("figuras")) dir.create("figuras")
+
+
+# 1. LEITURA E LIMPEZA DOS DADOS
+dados <- read.delim("C:/Users/User/OneDrive/Desktop/ananalise de dados/Trabalho AD/BasedeDados.txt",
+                    header = TRUE, sep = "\t",
+                    stringsAsFactors = FALSE, strip.white = TRUE)
+
+dados <- dados %>%
+  mutate(across(where(is.character), trimws)) %>%
+  mutate(
+    TREAT        = factor(TREAT, levels = c("CONTROL", "PLACEBO", "TREATMENT")),
+    VISIT        = factor(VISIT, levels = c("PRE", "POST")),
+    GENDER       = factor(GENDER, levels = c("FEMALE", "MALE")),
+    SMOKESTATUS  = factor(SMOKESTATUS,
+                          levels = c("NON-SMOKER", "QUIT-SMOKER", "SMOKER")),
+    LIVINGSTATUS = factor(LIVINGSTATUS)
+  )
+ print(dim(dados))
+ print(table(dados$VISIT, dados$TREAT))
+
+
+# 2. FORMATO LARGO + VARIÁVEIS DERIVADAS
+dados_largo <- dados %>%
+  pivot_wider(
+    id_cols      = c(ID, TREAT, AGE, LIVINGSTATUS, SMOKESTATUS, GENDER),
+    names_from   = VISIT,
+    values_from  = WEIGHT,
+    names_prefix = "WEIGHT_"
+  ) %>%
+  mutate(
+    MUDANCA    = WEIGHT_POST - WEIGHT_PRE,
+    Perda_Peso = WEIGHT_PRE - WEIGHT_POST,
+    Perda_Rel  = (MUDANCA / WEIGHT_PRE) * 100
+  )
+
+d <- dados_largo
+
+d$Tratamento <- factor(
+  ifelse(d$TREAT == "TREATMENT", "Tratamento", "Controlo"),
+  levels = c("Controlo", "Tratamento")
+)
+d$Fumador <- factor(
+  ifelse(d$SMOKESTATUS == "SMOKER", "Fumador", "Nao fumador"),
+  levels = c("Nao fumador", "Fumador")
+)
+d$Estado_Marital <- factor(
+  ifelse(grepl("ALONE", d$LIVINGSTATUS), "Sozinho", "Acompanhado"),
+  levels = c("Acompanhado", "Sozinho")
+)
+
+print(table(d$Tratamento))
+print(table(d$Fumador))
+print(table(d$Estado_Marital))
+print(table(d$GENDER))
+
+
+# 3. FUNÇÕES AUXILIARES
+cohens_d_manual <- function(x, y) {
+  n1 <- length(x); n2 <- length(y)
+  sp <- sqrt(((n1 - 1) * var(x) + (n2 - 1) * var(y)) / (n1 + n2 - 2))
+  (mean(x) - mean(y)) / sp
+}
+eta_sq_aov <- function(modelo) {
+  s    <- summary(modelo)[[1]]
+  ss   <- s[["Sum Sq"]]
+  eta2 <- ss / sum(ss); names(eta2) <- rownames(s); eta2
+}
+eta_partial_aov <- function(modelo) {
+  s     <- summary(modelo)[[1]]
+  ss    <- s[["Sum Sq"]]
+  eta_p <- ss / (ss + ss[length(ss)]); names(eta_p) <- rownames(s); eta_p
+}
+
+
+# 4. ANÁLISE DESCRITIVA
+tab_idade <- d %>%
+  group_by(TREAT) %>%
+  summarise(n = n(),
+            idade_media = mean(AGE), idade_sd = sd(AGE),
+            idade_min   = min(AGE),  idade_max = max(AGE))
+
+tab_genero <- d %>% count(TREAT, GENDER) %>%
+  group_by(TREAT) %>% mutate(percent = round(100 * n / sum(n), 1)) %>% ungroup()
+
+tab_fumo <- d %>% count(TREAT, SMOKESTATUS) %>%
+  group_by(TREAT) %>% mutate(percent = round(100 * n / sum(n), 1)) %>% ungroup()
+
+tab_estado <- d %>% count(TREAT, LIVINGSTATUS) %>%
+  group_by(TREAT) %>% mutate(percent = round(100 * n / sum(n), 1)) %>% ungroup()
+
+  print(tab_idade)
+  print(tab_genero)
+  print(tab_fumo)
+  print(tab_estado)
+
+write.csv(tab_idade,  "tabelas/tab_carac_idade.csv",     row.names = FALSE)
+write.csv(tab_genero, "tabelas/tab_carac_genero.csv",    row.names = FALSE)
+write.csv(tab_fumo,   "tabelas/tab_carac_tabagismo.csv", row.names = FALSE)
+write.csv(tab_estado, "tabelas/tab_carac_estado.csv",    row.names = FALSE)
+
+tab_freq_transform <- bind_rows(
+  data.frame(Variavel = "Tratamento agrupado",
+             Categoria = names(table(d$Tratamento)),
+             n = as.vector(table(d$Tratamento)),
+             pct = round(100 * as.vector(table(d$Tratamento)) / nrow(d), 1)),
+  data.frame(Variavel = "Tabagismo",
+             Categoria = names(table(d$Fumador)),
+             n = as.vector(table(d$Fumador)),
+             pct = round(100 * as.vector(table(d$Fumador)) / nrow(d), 1)),
+  data.frame(Variavel = "Estado marital",
+             Categoria = names(table(d$Estado_Marital)),
+             n = as.vector(table(d$Estado_Marital)),
+             pct = round(100 * as.vector(table(d$Estado_Marital)) / nrow(d), 1))
+)
+ print(tab_freq_transform)
+write.csv(tab_freq_transform, "tabelas/tab_freq_transformadas.csv", row.names = FALSE)
+
+tab_perda_grupo <- d %>%
+  group_by(TREAT) %>%
+  summarise(n = n(), media = mean(Perda_Peso), mediana = median(Perda_Peso),
+            sd = sd(Perda_Peso), min = min(Perda_Peso), max = max(Perda_Peso))
+
+tab_perda_grupo_agr <- d %>%
+  group_by(Tratamento) %>%
+  summarise(n = n(), media = mean(Perda_Peso), mediana = median(Perda_Peso),
+            sd = sd(Perda_Peso), min = min(Perda_Peso), max = max(Perda_Peso))
+
+ print(tab_perda_grupo)
+ print(tab_perda_grupo_agr)
+write.csv(tab_perda_grupo,     "tabelas/tab_perda_grupo_original.csv", row.names = FALSE)
+write.csv(tab_perda_grupo_agr, "tabelas/tab_perda_grupo_agrupado.csv", row.names = FALSE)
+
+tab_perda_fumador <- d %>% group_by(Fumador) %>%
+  summarise(n = n(), media = mean(Perda_Peso), sd = sd(Perda_Peso))
+tab_perda_estado <- d %>% group_by(Estado_Marital) %>%
+  summarise(n = n(), media = mean(Perda_Peso), sd = sd(Perda_Peso))
+tab_perda_genero <- d %>% group_by(GENDER) %>%
+  summarise(n = n(), media = mean(Perda_Peso), sd = sd(Perda_Peso))
+
+   print(tab_perda_fumador)
+   print(tab_perda_estado)
+   print(tab_perda_genero)
+write.csv(tab_perda_fumador, "tabelas/tab_perda_tabagismo.csv", row.names = FALSE)
+write.csv(tab_perda_estado,  "tabelas/tab_perda_estado.csv",    row.names = FALSE)
+write.csv(tab_perda_genero,  "tabelas/tab_perda_genero.csv",    row.names = FALSE)
+
+tab_cor_idade <- d %>% group_by(TREAT) %>%
+  summarise(r_idade_perda = cor(AGE, Perda_Peso))
+ print(tab_cor_idade)
+write.csv(tab_cor_idade, "tabelas/tab_cor_idade.csv", row.names = FALSE)
+
+Q1 <- quantile(d$Perda_Peso, 0.25)
+Q3 <- quantile(d$Perda_Peso, 0.75)
+IQR_val <- Q3 - Q1
+lim_inf <- Q1 - 1.5 * IQR_val
+lim_sup <- Q3 + 1.5 * IQR_val
+
+tab_outliers <- d %>%
+  filter(Perda_Peso < lim_inf | Perda_Peso > lim_sup) %>%
+  select(ID, TREAT, AGE, GENDER, WEIGHT_PRE, WEIGHT_POST, Perda_Peso)
+cat("\n=== Outliers (1,5 × IQR) ===\n"); print(tab_outliers)
+write.csv(tab_outliers, "tabelas/tab_outliers.csv", row.names = FALSE)
+
+tab_cruz_genero <- table(d$TREAT, d$GENDER)
+tab_cruz_fumo   <- table(d$TREAT, d$SMOKESTATUS)
+tab_cruz_estado <- table(d$TREAT, d$LIVINGSTATUS)
+print(tab_cruz_genero)
+print(tab_cruz_fumo)
+print(tab_cruz_estado)
+write.csv(as.data.frame.matrix(tab_cruz_genero), "tabelas/tab_cruz_genero.csv")
+write.csv(as.data.frame.matrix(tab_cruz_fumo),   "tabelas/tab_cruz_tabagismo.csv")
+write.csv(as.data.frame.matrix(tab_cruz_estado), "tabelas/tab_cruz_estado.csv")
+
+
+# 5. GRÁFICOS EXPLORATÓRIOS 
+
+grafico_box_grupo <- ggplot(d, aes(x = TREAT, y = Perda_Peso, fill = TREAT)) +
+  geom_boxplot(alpha = 0.7) +
+  geom_hline(yintercept = 0, linetype = "dashed", color = "red") +
+  labs(title = "Perda de peso por grupo", x = "Grupo", y = "Perda (kg)") +
+  theme_minimal() + theme(legend.position = "none")
+print(grafico_box_grupo)                                            # <<< NOVO
+ggsave("figuras/fig_box_grupo.png", grafico_box_grupo, width = 6, height = 4, dpi = 300)
+
+grafico_pre_post <- dados %>%
+  ggplot(aes(x = TREAT, y = WEIGHT, fill = VISIT)) +
+  geom_boxplot(alpha = 0.7) +
+  labs(title = "Peso pré e pós por grupo",
+       x = "Grupo", y = "Peso (kg)", fill = "Visita") +
+  theme_minimal()
+print(grafico_pre_post)                                             # <<< NOVO
+ggsave("figuras/fig_pre_post.png",  grafico_pre_post,  width = 6, height = 4, dpi = 300)
+
+grafico_hist <- ggplot(d, aes(x = Perda_Peso, fill = TREAT)) +
+  geom_histogram(bins = 20, alpha = 0.6, position = "identity") +
+  geom_vline(xintercept = 0, linetype = "dashed", color = "red") +
+  facet_wrap(~ TREAT, ncol = 1) +
+  labs(title = "Distribuição da perda de peso",
+       x = "Perda (kg)", y = "Frequência") +
+  theme_minimal()
+print(grafico_hist)                                                 # <<< NOVO
+ggsave("figuras/fig_hist.png",      grafico_hist,      width = 6, height = 6, dpi = 300)
+
+grafico_idade <- ggplot(d, aes(x = AGE, y = Perda_Peso, color = TREAT)) +
+  geom_point(alpha = 0.7) +
+  geom_smooth(method = "lm", se = FALSE) +
+  labs(title = "Idade vs perda de peso",
+       x = "Idade", y = "Perda (kg)", color = "Grupo") +
+  theme_minimal()
+print(grafico_idade)                                                # <<< NOVO
+ggsave("figuras/fig_idade.png",     grafico_idade,     width = 6, height = 4, dpi = 300)
+
+grafico_genero <- ggplot(d, aes(x = TREAT, y = Perda_Peso, fill = GENDER)) +
+  geom_boxplot(alpha = 0.7) +
+  geom_hline(yintercept = 0, linetype = "dashed", color = "red") +
+  labs(title = "Perda por género e grupo",
+       x = "Grupo", y = "Perda (kg)", fill = "Género") +
+  theme_minimal()
+print(grafico_genero)                                               # <<< NOVO
+ggsave("figuras/fig_genero.png",    grafico_genero,    width = 6, height = 4, dpi = 300)
+
+grafico_fumo <- ggplot(d, aes(x = TREAT, y = Perda_Peso, fill = SMOKESTATUS)) +
+  geom_boxplot(alpha = 0.7) +
+  geom_hline(yintercept = 0, linetype = "dashed", color = "red") +
+  labs(title = "Perda por tabagismo e grupo",
+       x = "Grupo", y = "Perda (kg)", fill = "Tabagismo") +
+  theme_minimal()
+print(grafico_fumo)                                                 # <<< NOVO
+ggsave("figuras/fig_fumo.png",      grafico_fumo,      width = 6, height = 4, dpi = 300)
+
+grafico_estado <- ggplot(d, aes(x = TREAT, y = Perda_Peso, fill = LIVINGSTATUS)) +
+  geom_boxplot(alpha = 0.7) +
+  geom_hline(yintercept = 0, linetype = "dashed", color = "red") +
+  labs(title = "Perda por estado civil e grupo",
+       x = "Grupo", y = "Perda (kg)", fill = "Estado civil") +
+  theme_minimal()
+print(grafico_estado)                                               # <<< NOVO
+ggsave("figuras/fig_estado.png",    grafico_estado,    width = 6, height = 4, dpi = 300)
+
+# 6. VERIFICAÇÃO DE PRESSUPOSTOS
+for (g in levels(d$Tratamento)) {
+  cat("\nGrupo:", g, "\n")
+  print(shapiro.test(d$Perda_Peso[d$Tratamento == g]))
+}
+print(leveneTest(Perda_Peso ~ Tratamento, data = d))
+
+
+# 7. OBJECTIVO 1 — EFEITO DO TRATAMENTO
+for (g in levels(d$Tratamento)) {
+  sub <- d[d$Tratamento == g, ]
+  cat("\n>>> Grupo:", g, "\n")
+  print(t.test(sub$WEIGHT_PRE, sub$WEIGHT_POST, paired = TRUE))
+}
+
+t_student <- t.test(Perda_Peso ~ Tratamento, data = d, var.equal = TRUE)
+print(t_student)
+
+t_welch <- t.test(Perda_Peso ~ Tratamento, data = d, var.equal = FALSE)
+print(t_welch)
+
+x_trat <- d$Perda_Peso[d$Tratamento == "Tratamento"]
+x_ctrl <- d$Perda_Peso[d$Tratamento == "Controlo"]
+d_cohen <- cohens_d_manual(x_trat, x_ctrl)
+cat("\nCohen's d (Tratamento vs Controlo) =", round(d_cohen, 2), "\n")
+
+mod3 <- aov(Perda_Peso ~ TREAT, data = d)
+ print(summary(mod3))
+print(round(eta_sq_aov(mod3), 4))
+print(TukeyHSD(mod3))
+
+# FACTORES ASSOCIADOS AO EFEITO
+print(t.test(Perda_Peso ~ Fumador, data = d, var.equal = TRUE))
+cat("d de Cohen =",
+    round(cohens_d_manual(d$Perda_Peso[d$Fumador == "Fumador"],
+                          d$Perda_Peso[d$Fumador == "Nao fumador"]), 2), "\n")
+
+print(t.test(Perda_Peso ~ Estado_Marital, data = d, var.equal = TRUE))
+cat("d de Cohen =",
+    round(cohens_d_manual(d$Perda_Peso[d$Estado_Marital == "Acompanhado"],
+                          d$Perda_Peso[d$Estado_Marital == "Sozinho"]), 2), "\n")
+
+print(t.test(Perda_Peso ~ GENDER, data = d, var.equal = TRUE))
+cat("d de Cohen =",
+    round(cohens_d_manual(d$Perda_Peso[d$GENDER == "FEMALE"],
+                          d$Perda_Peso[d$GENDER == "MALE"]), 2), "\n")
+
+mod_fum <- aov(Perda_Peso ~ Tratamento * Fumador, data = d)
+print(summary(mod_fum)); print(round(eta_partial_aov(mod_fum), 4))
+
+mod_mar <- aov(Perda_Peso ~ Tratamento * Estado_Marital, data = d)
+print(summary(mod_mar)); print(round(eta_partial_aov(mod_mar), 4))
+
+mod_gen <- aov(Perda_Peso ~ Tratamento * GENDER, data = d)
+print(summary(mod_gen)); print(round(eta_partial_aov(mod_gen), 4))
+
+
+# 8.3 GRÁFICOS DE INTERACÇÃO  
+
+
+# 8.3.1 Tratamento × Tabagismo
+with(d, interaction.plot(Tratamento, Fumador, Perda_Peso,
+                         main = "Tratamento × Tabagismo",
+                         ylab = "Perda média (kg)"))            # mostra no ecrã
+dev.copy(png, "figuras/fig_interacao_fumador.png",
+         width = 900, height = 600, res = 120)                  # copia para ficheiro
+dev.off()                                                       # fecha o png
+
+# 8.3.2 Tratamento × Estado marital
+with(d, interaction.plot(Tratamento, Estado_Marital, Perda_Peso,
+                         main = "Tratamento × Estado marital",
+                         ylab = "Perda média (kg)"))
+dev.copy(png, "figuras/fig_interacao_estado.png",
+         width = 900, height = 600, res = 120)
+dev.off()
+
+# 8.3.3 Tratamento × Género
+with(d, interaction.plot(Tratamento, GENDER, Perda_Peso,
+                         main = "Tratamento × Género",
+                         ylab = "Perda média (kg)"))
+dev.copy(png, "figuras/fig_interacao_genero.png",
+         width = 900, height = 600, res = 120)
+dev.off()
